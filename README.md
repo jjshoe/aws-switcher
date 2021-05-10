@@ -48,4 +48,4 @@ It expects a list of accounts, each account can have the following options:
 ```
 
 # Bash prompt
-The script writes out the name and region to `~/.aws/status`. The format is `name region`. Using fourth entry in the example config it would look like `Personal account us-east-1`. You could add the following to your `PS1` variable `(AWS: $(cat ~/.aws/status))` to be able to see which profile is active, and for what region.
+The script writes out the name and region to `~/.aws/status`. The format is `name region`. Using the third entry in the example config it would look like `Acme Widgets Prod us-east-1`. You could add the following to your `PS1` variable `(AWS: $(cat ~/.aws/status))` to be able to see which profile is active, and for what region.
