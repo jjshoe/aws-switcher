@@ -1,5 +1,5 @@
 # aws-switcher
-Set the default AWS profile in all your shells instantly
+Set the default AWS profile in all your shells instantly and handles assuming roles for you.
 
 # Usage
 `aws-switcher`
