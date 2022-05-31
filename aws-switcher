@@ -62,7 +62,7 @@ for (my  $i = 0; $i < scalar(@{$configs}); $i++)
     $ENV{'AWS_SECRET_ACCESS_KEY'} = $auth_mfa->{'aws_secret_access_key'};
 
     # Fetch the mfa token from the user
-    print "Enter the MFA token for " . $auth_mfa->{'profile'}  . ":\n";
+    print "Enter the MFA token for " . $auth_mfa->{'name'}  . " to assume into " . $configs->[$input]->{'name'} . ":\n";
     my $mfa_token = <STDIN>;
     chomp($mfa_token);
 
