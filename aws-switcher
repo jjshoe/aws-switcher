@@ -7,110 +7,188 @@ use YAML;
 
 use Data::Dumper;
 
+# Load in possible profiles
 my $configs = YAML::LoadFile($ENV{'HOME'} . '/.aws/config.yml');
 
-# print out a list of configs, and ask which one to run
-print "Which config would you like to switch to?\n";
+# Prompt which one we want to load
+my $selection = pick_config({configs => $configs});
 
-for (my $i = 0; $i < scalar(@{$configs}); $i++)
+# We need to loop through all profiles, but before we write them out there are special cases
+#   Referencing a source profile
+#   Referencing a mfa token
+#   SSO
+# When a special case is detected we need to do a little work to retrieve credentials for those profiles
+
+# Find out if we need to source another profile
+my $parent_profile;
+if ($configs->[$selection]->{'source_profile'})
 {
-  print $i . ') ' . $configs->[$i]->{'name'} . ' ' . $configs->[$i]->{'region'} . "\n";
-}
+  $parent_profile = find_parent_profile({profile => $configs->[$selection]->{'source_profile'}});
 
-my $input = <STDIN>;
-
-if ($input !~ /^\d+/)
-{
-  print "Try entering a number, idiot!\n";
-}
-
-
-# Write out chosen config
-open(my $fh, '>', $ENV{'HOME'} . '/.aws/config');
-print $fh "[default]\n";
-print $fh 'region = ' . $configs->[$input]->{'region'} . "\n";
-close($fh);
-
-# Write out chosen credentials
-open(my $fh, '>', $ENV{'HOME'} . '/.aws/credentials');
-
-my $config_options = ['aws_access_key_id', 'aws_secret_access_key', 'role_arn', 'source_profile', 'aws_session_token'];
-
-# Check if the selection needs us to auth to MFA
-my $auth_mfa = undef;
-
-# If the selected profile requires mfa
-if ($configs->[$input]->{'mfa_arn'})
-{
-  $auth_mfa = $configs->[$input];
-}
-
-# If it has a source profile, check if it requires mfa
-if ($configs->[$input]->{'source_profile'})
-{
-  $auth_mfa = mfa_check({profile => $configs->[$input]->{'profile'}, configs => $configs});
-}
-
-# Write out all profiles, but don't set the default yet. The default may require another profile, which needs to auth via mfa. 
-for (my  $i = 0; $i < scalar(@{$configs}); $i++) 
-{
-  # Check if they have MFA, if they do, we need to use a few values to fetch different credentials then what is in the config
-  if ($auth_mfa && $configs->[$i]->{'profile'} eq $auth_mfa->{'profile'})
+  # See if the parent profile requires mfa
+  if ($parent_profile->{'mfa_arn'})
   {
-    $ENV{'AWS_DEFAULT_REGION'} = 'us-east-1';
-    $ENV{'AWS_ACCESS_KEY_ID'} = $auth_mfa->{'aws_access_key_id'};
-    $ENV{'AWS_SECRET_ACCESS_KEY'} = $auth_mfa->{'aws_secret_access_key'};
+    my $credentials = request_credentials_with_mfa({profile => $parent_profile});
+    $parent_profile = {%{$parent_profile}, %{${credentials}}};
+  }
+}
+else
+{
+  # See if our selection requires mfa
+  if ($configs->[$selection]->{'mfa_arn'})
+  {
+    my $credentials = request_credentials_with_mfa({profile => $configs->[$selection]});
+    $configs->[$selection] = {%{$configs->[$selection]}, %{${credentials}}};
+  }
+}
 
-    # Fetch the mfa token from the user
-    print "Enter the MFA token for " . $auth_mfa->{'name'}  . " to assume into " . $configs->[$input]->{'name'} . ":\n";
-    my $mfa_token = <STDIN>;
-    chomp($mfa_token);
+write_configs({configs => $configs, selection => $selection});
 
-    my $aws_cli_output_raw = `aws sts get-session-token --serial-number $auth_mfa->{'mfa_arn'} --token-code $mfa_token --duration-seconds 129600`;
+# See if our selection requires SSO (sso credentials get cached, not written out to ~/.aws/credentials)
+if ($configs->[$selection]->{'sso_start_url'})
+{
+  request_credentials_with_sso({profile => $configs->[$selection]});
+}
 
-    if ($? != 0)
-    {
-      exit($?);
+sub write_configs
+{
+  my ($args) = @_;
+
+  my $configs   = $args->{'configs'};
+  my $selection = $args->{'selection'};
+
+  my $config_options = ['aws_access_key_id', 'aws_secret_access_key', 'role_arn', 'source_profile', 'aws_session_token', 'sso_start_url', 'sso_region', 'sso_account_id', 'sso_role_name', 'output'];
+
+  # Write out the config
+  open(my $fh, '>', $ENV{'HOME'} . '/.aws/config');
+  print $fh "[default]\n";
+  print $fh 'region = ' . $configs->[$selection]->{'region'} . "\n";
+  close($fh);
+
+  # Write out all profiles credentials
+  open(my $fh, '>', $ENV{'HOME'} . '/.aws/credentials');
+
+  for (my  $i = 0; $i < scalar(@{$configs}); $i++)
+  {
+    print $fh '[' . $configs->[$i]->{'profile'} . "]\n";
+    foreach my $config_option (@{$config_options})
+    { 
+      if (exists($configs->[$i]->{$config_option}))
+      {
+        print $fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
+      }
     }
-
-    my $aws_cli_output = decode_json($aws_cli_output_raw);
-
-    $configs->[$i]->{'aws_access_key_id'} = $aws_cli_output->{'Credentials'}->{'AccessKeyId'};
-    $configs->[$i]->{'aws_secret_access_key'} = $aws_cli_output->{'Credentials'}->{'SecretAccessKey'};
-    $configs->[$i]->{'aws_session_token'} = $aws_cli_output->{'Credentials'}->{'SessionToken'};
+    print $fh "\n";
   }
 
-  print $fh '[' . $configs->[$i]->{'profile'} . "]\n";
+  # Write out the picked profile as the default so no env args need to be set
+  print $fh "[default]\n";
+
   foreach my $config_option (@{$config_options})
-  { 
-    if (exists($configs->[$i]->{$config_option}))
+  {
+    if (exists($configs->[$selection]->{$config_option}))
     {
-      print $fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
+      print $fh $config_option . ' = ' . $configs->[$selection]->{$config_option} . "\n";
     }
   }
 
-  print $fh "\n";
+  close($fh);
+
+  # Write out a status file for bash PS1 to pick up
+  open(my $fh, '>', $ENV{'HOME'} . '/.aws/status');
+  print $fh $configs->[$selection]->{'name'} . ' ' . $configs->[$selection]->{'region'};
+  close($fh);
 }
 
-# Now write out the default, the profile we've picked
-print $fh "[default]\n";
-
-foreach my $config_option (@{$config_options})
+sub request_credentials_with_mfa
 {
-  if (exists($configs->[$input]->{$config_option}))
+  my ($args) = @_;
+
+  my $profile = $args->{'profile'};
+
+  $ENV{'AWS_DEFAULT_REGION'}    = $profile->{'region'};
+  $ENV{'AWS_ACCESS_KEY_ID'}     = $profile->{'aws_access_key_id'};
+  $ENV{'AWS_SECRET_ACCESS_KEY'} = $profile->{'aws_secret_access_key'};
+
+
+  # Fetch the mfa token from the user
+  print "Enter the MFA token for " . $profile->{'name'} . " to assume into " . $configs->[$selection]->{'name'} . ":\n";
+  my $mfa_token = <STDIN>;
+  chomp($mfa_token);
+  
+  my $aws_cli_output_raw = run_command({'command' => "aws sts get-session-token --serial_number $profile->{'mfa_arn'} --token-code $mfa_token --duration-seconds 129600"});
+  my $aws_cli_output = decode_json($aws_cli_output_raw);
+
+  return {aws_access_key_id => $aws_cli_output->{'Credentials'}->{'AccessKeyId'}, aws_secret_access_key => $aws_cli_output->{'Credentials'}->{'SecretAccessKey'}, aws_session_token => $aws_cli_output->{'Credentials'}->{'SessionToken'}};
+}
+
+sub request_credentials_with_sso
+{
+  my ($args) = @_;
+
+  my $profile = $args->{'profile'};
+
+  # Before we log in we have to write out details, so we don't munch existing profiles we'll just add one aptly named
+  my $epoch = time();
+  my @commands = (
+    "aws configure --profile sso_login_${epoch} set sso_start_url '" . $profile->{'sso_start_url'} . "'",
+    "aws configure --profile sso_login_$epoch set sso_region '" . $profile->{'sso_region'} . "'",
+    "aws configure --profile sso_login_$epoch set region '" . $profile->{'region'} . "'",
+    "aws configure --profile sso_login_$epoch set sso_account_id '" . $profile->{'sso_account_id'} . "'",
+    "aws configure --profile sso_login_$epoch set sso_role_name '" . $profile->{'sso_role_name'} . "'"
+  );
+
+  foreach my $command (@commands)
   {
-    print $fh $config_option . ' = ' . $configs->[$input]->{$config_option} . "\n";
+    run_command({'command' => $command});
+  }  
+
+  system("aws sso login --profile sso_login_$epoch --no-browser");
+}
+
+sub find_parent_profile
+{
+  my ($args) = @_;
+
+  my $profile = $args->{'profile'};
+
+  foreach my $config (@{$configs})
+  {
+    if ($profile eq $config->{'profile'})
+    {
+	    return $config;
+    }
+  }
+
+  return undef;
+}
+
+sub pick_config
+{
+  my ($args) = @_;
+
+  # print out a list of configs, and ask which one to run
+  print "Which config would you like to switch to?\n";
+
+  for (my $i = 0; $i < scalar(@{$configs}); $i++)
+  {
+    print $i . ') ' . $configs->[$i]->{'name'} . ' ' . $configs->[$i]->{'region'} . "\n";
+  }
+
+  my $input = <STDIN>;
+
+  if ($input !~ /^\d+/)
+  {
+    print "Try entering a number, idiot!\n";
+  }
+  else
+  {
+    return $input;
   }
 }
 
-close($fh);
-
-# Write out a status file for bash PS1 to pick up
-open(my $fh, '>', $ENV{'HOME'} . '/.aws/status');
-print $fh $configs->[$input]->{'name'} . ' ' . $configs->[$input]->{'region'};
-close($fh);
-
-sub mfa_check {
+sub mfa_check
+{
   my ($args) = @_;
 
   my $profile = $args->{'profile'};
@@ -122,9 +200,32 @@ sub mfa_check {
     {
       return mfa_check({profile => $config->{'source_profile'}, configs => $configs})
     }
-    elsif ($profile eq $config->{'profile'})
+    elsif ($profile eq $config->{'profile'} && $config->{'mfa_arn'})
     {
       return $config;
     }
   }
+}
+
+sub run_command {
+  my ($args) = @_;
+
+  my $command      = $args->{'command'};
+  my $print_output = $args->{'print_output'};
+
+  my $command_output = `$command`;
+
+  if ($print_output)
+  {
+    print "$command_output\n";
+  }
+
+  if ($? != 0)
+  {
+    print "Error running command: $command\n";
+    print $command_output . "\n";
+    exit(1);
+  }
+
+  return $command_output;
 }
