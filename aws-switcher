@@ -11,7 +11,7 @@ use Data::Dumper;
 my $configs = YAML::LoadFile($ENV{'HOME'} . '/.aws/config.yml');
 
 # Prompt which one we want to load
-my $selection = pick_config({configs => $configs});
+my $selection = pick_config({configs => $configs, filter => $ARGV[0]});
 
 # We need to loop through all profiles, but before we write them out there are special cases
 #   Referencing a source profile
@@ -128,22 +128,7 @@ sub request_credentials_with_sso
 
   my $profile = $args->{'profile'};
 
-  # Before we log in we have to write out details, so we don't munch existing profiles we'll just add one aptly named
-  my $epoch = time();
-  my @commands = (
-    "aws configure --profile sso_login_${epoch} set sso_start_url '" . $profile->{'sso_start_url'} . "'",
-    "aws configure --profile sso_login_$epoch set sso_region '" . $profile->{'sso_region'} . "'",
-    "aws configure --profile sso_login_$epoch set region '" . $profile->{'region'} . "'",
-    "aws configure --profile sso_login_$epoch set sso_account_id '" . $profile->{'sso_account_id'} . "'",
-    "aws configure --profile sso_login_$epoch set sso_role_name '" . $profile->{'sso_role_name'} . "'"
-  );
-
-  foreach my $command (@commands)
-  {
-    run_command({'command' => $command});
-  }  
-
-  system("aws sso login --profile sso_login_$epoch --no-browser");
+  run_command({'command' => 'aws sso login'});
 }
 
 sub find_parent_profile
@@ -167,12 +152,22 @@ sub pick_config
 {
   my ($args) = @_;
 
+  my $configs   = $args->{'configs'};
+  my $filter    = $args->{'filter'};
+
   # print out a list of configs, and ask which one to run
   print "Which config would you like to switch to?\n";
 
+  if ($filter)
+  {
+    print "(applied filter: $filter)\n";
+  }
+
   for (my $i = 0; $i < scalar(@{$configs}); $i++)
   {
-    print $i . ') ' . $configs->[$i]->{'name'} . ' ' . $configs->[$i]->{'region'} . "\n";
+    if ($configs->[$i]->{'name'} =~ /$filter/) {
+      print $i . ') ' . $configs->[$i]->{'name'} . ' ' . $configs->[$i]->{'region'} . "\n";
+    }
   }
 
   my $input = <STDIN>;
@@ -211,21 +206,12 @@ sub run_command {
   my ($args) = @_;
 
   my $command      = $args->{'command'};
-  my $print_output = $args->{'print_output'};
 
   my $command_output = `$command`;
 
-  if ($print_output)
-  {
-    print "$command_output\n";
-  }
-
   if ($? != 0)
   {
-    print "Error running command: $command\n";
-    print $command_output . "\n";
+    print "Error running command: $command\n$command_output\n";
     exit(1);
   }
-
-  return $command_output;
 }
