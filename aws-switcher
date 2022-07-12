@@ -60,10 +60,7 @@ sub write_configs
   my $config_options = ['aws_access_key_id', 'aws_secret_access_key', 'role_arn', 'source_profile', 'aws_session_token', 'sso_start_url', 'sso_region', 'sso_account_id', 'sso_role_name', 'output'];
 
   # Write out the config
-  open(my $fh, '>', $ENV{'HOME'} . '/.aws/config');
-  print $fh "[default]\n";
-  print $fh 'region = ' . $configs->[$selection]->{'region'} . "\n";
-  close($fh);
+  open(my $config_fh, '>', $ENV{'HOME'} . '/.aws/config');
 
   # Write out all profiles credentials
   open(my $fh, '>', $ENV{'HOME'} . '/.aws/credentials');
@@ -71,28 +68,34 @@ sub write_configs
   for (my  $i = 0; $i < scalar(@{$configs}); $i++)
   {
     print $fh '[' . $configs->[$i]->{'profile'} . "]\n";
+    print $config_fh '[' . $configs->[$i]->{'profile'} . "]\n";
     foreach my $config_option (@{$config_options})
     { 
       if (exists($configs->[$i]->{$config_option}))
       {
         print $fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
+        print $config_fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
       }
     }
     print $fh "\n";
+    print $config_fh "\n";
   }
 
   # Write out the picked profile as the default so no env args need to be set
   print $fh "[default]\n";
+  print $config_fh "[default]\n";
 
   foreach my $config_option (@{$config_options})
   {
     if (exists($configs->[$selection]->{$config_option}))
     {
       print $fh $config_option . ' = ' . $configs->[$selection]->{$config_option} . "\n";
+      print $config_fh $config_option . ' = ' . $configs->[$selection]->{$config_option} . "\n";
     }
   }
 
   close($fh);
+  close($config_fh);
 
   # Write out a status file for bash PS1 to pick up
   open(my $fh, '>', $ENV{'HOME'} . '/.aws/status');
