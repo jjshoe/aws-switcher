@@ -26,25 +26,37 @@ It expects a list of accounts, each account can have the following options:
   region: us-east-1
   aws_access_key_id: aaaa
   aws_secret_access_key: bbbb
+
 - name: Acme Widgets Dev
   profile: acme-dev
   region: us-east-1
   source_profile: acme-main
+
 - name: Acme Widgets Prod
   profile: acme-prod
   region: us-east-1
   source_profile: acme-main
   mfa_arn: arn:aws:iam::123123123123:mfa/acme
+
 - name: Personal account east
   profile: personal
   region: us-east-1
   aws_access_key_id: cccc
   aws_secret_access_key: dddd
+
 - name: Personal account west
   profile: personal
   region: us-west-1
   aws_access_key_id: cccc
   aws_secret_access_key: dddd
+
+- name: Dwight Work 
+  profile: dunder
+  region: us-east-1
+  sso_start_url: https://d-miflin.awsapps.com/start
+  sso_region: us-east-1
+  sso_account_id: 123123123123
+  sso_role_name: AssistantToTheRegionalManager
 ```
 
 # Bash prompt
