@@ -84,6 +84,7 @@ sub write_configs
   # Write out the picked profile as the default so no env args need to be set
   print $fh "[default]\n";
   print $config_fh "[default]\n";
+  print $config_fh "region = " . $configs->[$selection]->{'region'} . "\n";
 
   foreach my $config_option (@{$config_options})
   {
