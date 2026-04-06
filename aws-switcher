@@ -50,6 +50,10 @@ if ($configs->[$selection]->{'sso_start_url'})
   request_credentials_with_sso({profile => $configs->[$selection]});
 }
 
+verify_identity({profile => $configs->[$selection]});
+
+send_notification({profile => $configs->[$selection]->{'name'}, region => $configs->[$selection]->{'region'}});
+
 sub write_configs
 {
   my ($args) = @_;
@@ -57,10 +61,28 @@ sub write_configs
   my $configs   = $args->{'configs'};
   my $selection = $args->{'selection'};
 
-  my $config_options = ['aws_access_key_id', 'aws_secret_access_key', 'role_arn', 'source_profile', 'aws_session_token', 'sso_start_url', 'sso_region', 'sso_account_id', 'sso_role_name', 'output'];
+  my $config_options = ['aws_access_key_id', 'aws_secret_access_key', 'role_arn', 'source_profile', 'aws_session_token', 'sso_account_id', 'sso_role_name', 'output'];
 
   # Write out the config
   open(my $config_fh, '>', $ENV{'HOME'} . '/.aws/config');
+
+  # Collect and write unique SSO sessions
+  my %sso_sessions;
+  for (my $i = 0; $i < scalar(@{$configs}); $i++)
+  {
+    if ($configs->[$i]->{'sso_start_url'})
+    {
+      my $name = get_sso_session_name($configs->[$i]->{'sso_start_url'});
+      if (!$sso_sessions{$name})
+      {
+        $sso_sessions{$name} = 1;
+        print $config_fh "[sso-session $name]\n";
+        print $config_fh "sso_start_url = " . $configs->[$i]->{'sso_start_url'} . "\n";
+        print $config_fh "sso_region = " . $configs->[$i]->{'sso_region'} . "\n";
+        print $config_fh "sso_registration_scopes = sso:account:access\n\n";
+      }
+    }
+  }
 
   # Write out all profiles credentials
   open(my $fh, '>', $ENV{'HOME'} . '/.aws/credentials');
@@ -76,6 +98,11 @@ sub write_configs
         print $fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
         print $config_fh $config_option . ' = ' . $configs->[$i]->{$config_option} . "\n";
       }
+    }
+    if ($configs->[$i]->{'sso_start_url'})
+    {
+      my $session_name = get_sso_session_name($configs->[$i]->{'sso_start_url'});
+      print $config_fh "sso_session = $session_name\n";
     }
     print $fh "\n";
     print $config_fh "\n";
@@ -94,12 +121,19 @@ sub write_configs
       print $config_fh $config_option . ' = ' . $configs->[$selection]->{$config_option} . "\n";
     }
   }
+  if ($configs->[$selection]->{'sso_start_url'})
+  {
+    my $session_name = get_sso_session_name($configs->[$selection]->{'sso_start_url'});
+    print $config_fh "sso_session = $session_name\n";
+  }
 
   close($fh);
   close($config_fh);
 
   # Write out a status file for bash PS1 to pick up
-  open(my $fh, '>', $ENV{'HOME'} . '/.aws/status');
+  my $cache_dir = $ENV{'HOME'} . '/.cache/aws-switcher';
+  mkdir $cache_dir unless -d $cache_dir;
+  open(my $fh, '>', $cache_dir . '/status');
   print $fh $configs->[$selection]->{'name'} . ' ' . $configs->[$selection]->{'region'};
   close($fh);
 }
@@ -132,7 +166,24 @@ sub request_credentials_with_sso
 
   my $profile = $args->{'profile'};
 
-  run_command({'command' => 'aws sso login'});
+  if ($profile->{'browser'})
+  {
+    $ENV{'BROWSER'} = $profile->{'browser'};
+  }
+
+  run_command({'command' => 'aws sso login', 'interactive' => 1});
+}
+
+sub get_sso_session_name
+{
+  my ($url) = @_;
+
+  if ($url =~ m{https://([^.]+)\.})
+  {
+    return $1;
+  }
+
+  return 'default';
 }
 
 sub find_parent_profile
@@ -210,12 +261,55 @@ sub run_command {
   my ($args) = @_;
 
   my $command      = $args->{'command'};
+  my $interactive  = $args->{'interactive'};
 
-  my $command_output = `$command`;
+  my $command_output;
+
+  if ($interactive)
+  {
+    system($command);
+  }
+  else
+  {
+    $command_output = `$command`;
+  }
 
   if ($? != 0)
   {
     print "Error running command: $command\n$command_output\n";
     exit(1);
   }
+}
+
+sub verify_identity
+{
+  my ($args) = @_;
+  my $profile = $args->{'profile'};
+
+  my $raw = `aws sts get-caller-identity 2>&1`;
+  if ($? != 0)
+  {
+    print "Failed to verify identity: $raw\n";
+    exit(1);
+  }
+
+  my $identity = decode_json($raw);
+  my $expected_account = $profile->{'sso_account_id'} || $profile->{'account_id'};
+
+  if ($expected_account && $identity->{'Account'} ne $expected_account)
+  {
+    print "Account mismatch! Expected $expected_account but got $identity->{'Account'}\n";
+    exit(1);
+  }
+}
+
+sub send_notification
+{
+  my ($args) = @_;
+
+  my $profile = $args->{'profile'};
+  my $region  = $args->{'region'};
+
+  my $json = encode_json({order => 1, key => "AWS", value => "$profile $region", cache => "~/.cache/aws-switcher/status"});
+  system("dbus-send --session --type=method_call --dest=me.deport.eDashboard /me/deport/eDashboard me.deport.eDashboard.Update 'string:$json'");
 }

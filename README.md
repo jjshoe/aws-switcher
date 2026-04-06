@@ -18,6 +18,10 @@ It expects a list of accounts, each account can have the following options:
 |`mfa_arn`| String||The ARN of the MFA device you use when authenticating.|
 |`source_profile`|String||The profile you want to authenticate with before assuming to the role specified by `role_arn`.|
 |`role_arn`|String||The ARN of the role you want to assume.|
+|`browser`|String||A custom browser command to use for SSO login. Must include `%s` as a placeholder for the URL.|
+
+# Notifications
+After switching profiles, a desktop notification is sent via D-Bus to org.freedesktop.Notifications showing the active profile and region.
 
 # Example
 ```
@@ -57,6 +61,7 @@ It expects a list of accounts, each account can have the following options:
   sso_region: us-east-1
   sso_account_id: 123123123123
   sso_role_name: AssistantToTheRegionalManager
+  browser: "/usr/bin/chromium --profile-directory=Default %s"
 ```
 
 # Bash prompt
